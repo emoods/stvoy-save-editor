@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STVOY Save Editor</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body>
+    <div id="app" class="lcars-frame">
+        <header class="lcars-header">
+            <div class="lcars-elbow lcars-elbow-left"></div>
+            <div class="lcars-bar">
+                <h1>STVOY SAVE EDITOR</h1>
+            </div>
+            <div class="lcars-elbow lcars-elbow-right"></div>
+        </header>
+
+        <main class="lcars-main">
+            <aside class="lcars-sidebar">
+                <div class="lcars-block lcars-block-1">47</div>
+                <div class="lcars-block lcars-block-2">SAVE</div>
+                <div class="lcars-block lcars-block-3">EDIT</div>
+                <div class="lcars-block lcars-block-4">DATA</div>
+                <div class="lcars-block lcars-block-5">74656</div>
+            </aside>
+
+            <div class="lcars-content">
+                <!-- File Upload Section -->
+                <section class="panel">
+                    <h2>Upload Save File</h2>
+                    <p class="note">
+                        Save files are located at:<br>
+                        <code>C:\Users\&lt;Name&gt;\AppData\Local\STVoyager\Saved\SaveGames\&lt;SteamID&gt;\</code>
+                    </p>
+                    <div class="file-upload">
+                        <label for="file-input" class="lcars-button">SELECT SAVE FILE</label>
+                        <input type="file" id="file-input" accept=".sav" @change="handleFileSelect" />
+                        <span class="filename">{{ filename }}</span>
+                        <span v-if="saveTimestamp" class="save-timestamp">Saved: {{ saveTimestamp }}</span>
+                    </div>
+                    <div v-if="status.message" :class="['status', 'status-' + status.type]">
+                        {{ status.message }}
+                    </div>
+                </section>
+
+                <!-- Editor Section -->
+                <section v-if="loaded" class="panel">
+                    <!-- Hull Integrity -->
+                    <div class="resource-panel">
+                        <h2>Hull Integrity</h2>
+                        <div v-if="hull">
+                            <div class="resource-row">
+                                <label>Hull Integrity</label>
+                                <input type="number" step="0.1" 
+                                    v-model.number="hull.value"
+                                    :class="['resource-input', { modified: hull.value !== hull.original }]" />
+                            </div>
+                            <span class="note">(Max hull is determined by ship modules)</span>
+                        </div>
+                        <p v-else class="note">Hull integrity not found in this save.</p>
+                    </div>
+
+                    <!-- Base Resources -->
+                    <div class="resource-panel">
+                        <h2>Base Resources</h2>
+                        <div class="resource-grid">
+                            <div v-for="res in baseResources" :key="res.name" class="resource-row">
+                                <label :title="res.name">{{ formatResourceName(res.name) }}</label>
+                                <input type="number" 
+                                    v-model.number="res.quantity"
+                                    :class="['resource-input', { modified: res.quantity !== res.original }]" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Items -->
+                    <div class="resource-panel">
+                        <h2>Items &amp; Unlocks</h2>
+                        <p class="note">All game items organized by category. Items in your save are editable; others can be added.</p>
+                        <div id="item-resources">
+                            <!-- Stackable Items in Save -->
+                            <div v-if="stackableItemsInSave.length" class="resource-category">
+                                <h4>Stackable Items (In Save)</h4>
+                                <div class="category-content">
+                                    <div v-for="res in stackableItemsInSave" :key="res.name" class="resource-row">
+                                        <label :title="res.description || res.name">{{ getDisplayName(res.name) }}</label>
+                                        <input type="number" 
+                                            v-model.number="res.quantity"
+                                            :class="['resource-input', { modified: res.quantity !== res.original }]" />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Item Categories -->
+                            <div v-for="cat in itemCategories" :key="cat.key" class="resource-category" :class="{ collapsed: cat.collapsed }">
+                                <h4 class="category-header" @click="cat.collapsed = !cat.collapsed">
+                                    <span class="collapse-icon">{{ cat.collapsed ? '+' : '-' }}</span>
+                                    {{ cat.title }}
+                                    <span class="item-count">({{ cat.items.length }})</span>
+                                </h4>
+                                <div class="category-content">
+                                    <div v-for="item in cat.items" :key="item.fullName" 
+                                        :class="['resource-row', { 'item-not-in-save': !item.inSave, 'item-added': item.added }]"
+                                        :title="item.description">
+                                        <label>{{ item.displayName }}</label>
+                                        
+                                        <!-- Not in save: show Add button -->
+                                        <button v-if="!item.inSave && !item.added" class="add-btn" @click="addItem(item)">+ Add</button>
+                                        
+                                        <!-- Stackable: number input -->
+                                        <input v-else-if="item.stackable" type="number" min="0"
+                                            v-model.number="item.quantity"
+                                            :class="['resource-input', { modified: item.quantity !== item.original }]" />
+                                        
+                                        <!-- Boolean: checkbox -->
+                                        <template v-else>
+                                            <input type="checkbox" v-model="item.checked"
+                                                :class="['resource-checkbox', { modified: item.checked !== item.originalChecked }]" />
+                                            <span :class="['badge', item.checked ? 'badge-unlocked' : 'badge-locked']">
+                                                {{ item.checked ? 'Unlocked' : 'Locked' }}
+                                            </span>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tech Tree -->
+                    <div class="resource-panel">
+                        <h2>Tech Tree</h2>
+                        <p class="note">Research and abilities unlocked in your save. Add new techs or remove existing ones.</p>
+                        <div id="tech-tree">
+                            <!-- Hierarchical Categories -->
+                            <div v-for="cat in techCategories" :key="cat.key" class="resource-category" :class="{ collapsed: cat.collapsed }">
+                                <h4 class="category-header" @click="cat.collapsed = !cat.collapsed">
+                                    <span class="collapse-icon">{{ cat.collapsed ? '+' : '-' }}</span>
+                                    {{ cat.title }}
+                                    <span class="item-count">({{ cat.unlockedCount }}/{{ cat.totalCount }})</span>
+                                </h4>
+                                <div class="category-content">
+                                    <!-- Rooms within category -->
+                                    <div v-for="room in cat.rooms" :key="room.key" class="tech-room" :class="{ collapsed: room.collapsed }">
+                                        <h5 class="room-header" @click.stop="room.collapsed = !room.collapsed">
+                                            <span class="collapse-icon">{{ room.collapsed ? '+' : '-' }}</span>
+                                            {{ room.displayName }}
+                                            <span class="item-count">({{ room.unlockedCount }}/{{ room.techs.length }})</span>
+                                        </h5>
+                                        <div class="room-content">
+                                            <div v-for="tech in room.techs" :key="tech.path"
+                                                :class="['resource-row', { 
+                                                    'tech-not-unlocked': !tech.unlocked && !tech.adding,
+                                                    'tech-adding': tech.adding,
+                                                    'tech-removing': tech.removing 
+                                                }]">
+                                                <label :title="tech.path">{{ tech.displayName }}</label>
+                                                <input type="checkbox" v-model="tech.checked"
+                                                    @change="onTechChange(tech)"
+                                                    :class="['tech-checkbox', { modified: tech.checked !== tech.originalChecked }]" />
+                                                <span :class="['badge', tech.checked ? 'badge-unlocked' : 'badge-locked']">
+                                                    {{ tech.checked ? 'Unlocked' : 'Locked' }}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Flat techs (for prerequisites/abilities) -->
+                                    <template v-if="cat.flatTechs">
+                                        <div v-for="tech in cat.flatTechs" :key="tech.path"
+                                            :class="['resource-row', { 
+                                                'tech-not-unlocked': !tech.unlocked && !tech.adding,
+                                                'tech-adding': tech.adding,
+                                                'tech-removing': tech.removing 
+                                            }]">
+                                            <label :title="tech.path">{{ tech.displayName }}</label>
+                                            <input type="checkbox" v-model="tech.checked"
+                                                @change="onTechChange(tech)"
+                                                :class="['tech-checkbox', { modified: tech.checked !== tech.originalChecked }]" />
+                                            <span :class="['badge', tech.checked ? 'badge-unlocked' : 'badge-locked']">
+                                                {{ tech.checked ? 'Unlocked' : 'Locked' }}
+                                            </span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <!-- Unknown Techs -->
+                            <div v-if="unknownTechs.length" class="resource-category">
+                                <h4>Unknown Techs ({{ unknownTechs.length }})</h4>
+                                <div class="category-content" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px;">
+                                    <div v-for="tech in unknownTechs" :key="tech.path" class="resource-row">
+                                        <label :title="tech.path">{{ tech.displayName }}</label>
+                                        <input type="checkbox" v-model="tech.checked"
+                                            @change="onTechChange(tech)"
+                                            :class="['tech-checkbox', { modified: tech.checked !== tech.originalChecked }]" />
+                                        <span class="badge badge-unlocked">Unlocked</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Download -->
+                    <div class="download-section">
+                        <button class="lcars-button lcars-button-primary" @click="handleDownload">
+                            DOWNLOAD MODIFIED SAVE
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Disclaimer -->
+                <section class="panel disclaimer">
+                    <h2>Disclaimer</h2>
+                    <p>
+                        <strong>This is a personal side project provided "as-is".</strong> 
+                        I cannot provide support or fix bugs. If you encounter issues, 
+                        feel free to <a href="https://github.com/emoods/stvoy-save-editor" target="_blank">fork the repository</a> 
+                        and fix them yourself.
+                    </p>
+                    <p>
+                        <strong>Always backup your saves before editing.</strong> 
+                        This tool is not affiliated with Gamexcite, Daedalic Entertainment, 
+                        or any game/franchise rights holders.
+                    </p>
+                </section>
+            </div>
+        </main>
+
+        <footer class="lcars-footer">
+            <div class="lcars-bar">
+                <span>STVOY SAVE EDITOR</span>
+                <span class="lcars-footer-link">
+                    <a href="https://github.com/emoods/stvoy-save-editor" target="_blank">GitHub</a>
+                </span>
+            </div>
+        </footer>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
